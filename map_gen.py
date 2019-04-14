@@ -48,12 +48,21 @@ def bury_data():
     final_out = []
     for file in map_dir:
         with open('./Maps/{}'.format(file)) as f:
+            #  cur_rom_space will be a list of lists
             for cur_rom_sapce in f.read().split('\n')[6:-4]:
+
+                #  remove all -1's, AKA filler, from each line.
                 cur_rom_line = list(filter(lambda a: a != -1, [(int(i) - 1) for i in cur_rom_sapce.split(',')]))
+
                 if cur_rom_line:
                     repaired = []
+                    #  pair up the hex values, in the pattern [1, 2] [3, 4]
                     for v, w in zip(cur_rom_line[::2], cur_rom_line[1::2]):
+
+                        #  ex: [5, 1] becomes [51] becomes [0x33]
                         repaired.append(int(hex(v)[2]+hex(w)[2], 16))
+
+                    # turn the integers back into a bytestring, and send it out
                     final_out.append(array.array('B', repaired).tobytes())
     return final_out
 
