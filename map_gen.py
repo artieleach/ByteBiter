@@ -2,19 +2,21 @@ import numpy as np
 import arcade
 import os
 import array
+import time
 
-my_file = 'smb3.nes'
+my_file = 'Alice'
 
 map_dir = sorted([mf for mf in [mf for mf in os.listdir('./Maps') if os.path.isfile(os.path.join('./Maps', mf))] if
                   mf.endswith('.tmx')])
-
+for file in map_dir:
+    os.remove('./Maps/{}'.format(file))
 MAP_SIZE = 64
 TILE_SIZE = TILE_WIDTH, TILE_HEIGHT = (64, 64)
 SCREEN_SIZE = SCREEN_WIDTH, SCREEN_HEIGHT = (TILE_WIDTH*16, TILE_HEIGHT*9)
-SCREEN_TITLE = "Rom Explorer"
+SCREEN_TITLE = "Byte Biter"
 
-VIEWPORT_MARGIN_TOP = TILE_HEIGHT
-VIEWPORT_MARGIN_BOTTOM = TILE_HEIGHT
+VIEWPORT_MARGIN_TOP = TILE_HEIGHT * 3
+VIEWPORT_MARGIN_BOTTOM = TILE_HEIGHT * 3
 VIEWPORT_RIGHT_MARGIN = TILE_WIDTH * 6
 VIEWPORT_LEFT_MARGIN = TILE_WIDTH * 6
 
@@ -30,7 +32,7 @@ def get_data(input_file):
         mario_rom = []
         for i in input_data.read():
             v = hex(i)[2:].zfill(2)
-            mario_rom.append([int(v[0], 16)+1, int(v[1].zfill(1), 16)+1])
+            mario_rom.append([int(v[0], 16), int(v[1].zfill(1), 16)])
 
     # unzip
     mario_rom = [item for sublist in mario_rom for item in sublist]
@@ -38,8 +40,8 @@ def get_data(input_file):
     # split the data
     composite_list = [mario_rom[x:x+MAP_SIZE**2] for x in range(0, len(mario_rom), MAP_SIZE**2)]
 
-    # pad the last element with zeros, so all maps are the same size
-    composite_list[-1] += [0] * (MAP_SIZE**2 - len(composite_list[-1]))
+    # pad the last map with zeros, so all maps are the same size
+    composite_list[-1] += [-1] * (MAP_SIZE**2 - len(composite_list[-1]))
 
     return composite_list
 
@@ -52,22 +54,22 @@ def bury_data():
             for cur_rom_sapce in f.read().split('\n')[6:-4]:
 
                 #  remove all -1's, AKA filler, from each line.
-                cur_rom_line = list(filter(lambda a: a != -1, [(int(i) - 1) for i in cur_rom_sapce.split(',')]))
+                cur_rom_line = list(filter(lambda a: a != -1, [(int(i)) for i in cur_rom_sapce.split(',')]))
 
                 if cur_rom_line:
                     repaired = []
                     #  pair up the hex values, in the pattern [1, 2] [3, 4]
                     for v, w in zip(cur_rom_line[::2], cur_rom_line[1::2]):
 
-                        #  ex: [5, 1] becomes [51] becomes [0x33]
+                        #  ex: [5, 1] becomes [51] becomes [0x33]. hex(x) is actually just a string of "0xXX"
                         repaired.append(int(hex(v)[2]+hex(w)[2], 16))
 
-                    # turn the integers back into a bytestring, and send it out
+                    # turn the integers back into a byte string, and send it out
                     final_out.append(array.array('B', repaired).tobytes())
     return final_out
 
 
-def gen_map_file(map_info, map_data):
+def gen_map_file(map_info, map_arr):
     header = '''<?xml version="1.0" encoding="UTF-8"?>
 <map version="1.2" tiledversion="1.2.3" orientation="orthogonal" renderorder="right-down" width="{0}" height="{1}" 
 tilewidth="64" tileheight="64" infinite="0" nextlayerid="2" nextobjectid="1">
@@ -76,19 +78,20 @@ tilewidth="64" tileheight="64" infinite="0" nextlayerid="2" nextobjectid="1">
   <data encoding="csv">
 {2}</data>
  </layer>
-</map>'''.format(map_info[0], map_info[1], map_data)
+</map>'''.format(map_info[0], map_info[1], map_arr)
     return header
 
-# hey artie, you're currenlty working on masking out the 1's (actually 0's) in order to make some blocks transparent
-# you have a function which does that, but it's kind of slow, and you probably need to reverse it afterwards too. that's annoying
-# anyway goodnight
+def crunch_bytes(bytes):
+    return [int(hex(v)[2] + hex(w)[2], 16) for v, w in zip(bytes[::2], bytes[1::2])]
+
+
 class NesGame(arcade.Window):
     def __init__(self):
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
         file_path = os.path.dirname(os.path.abspath(__file__))
         os.chdir(file_path)
 
-        self.cur_block = (0, 0)
+        self.cur_block = self.cur_block_y, self.cur_block_x = (0, 0)
         self.wall_list = None
         self.player_list = None
         self.player_sprite = None
@@ -104,6 +107,11 @@ class NesGame(arcade.Window):
 
         self.end_of_map = MAP_SIZE * TILE_HEIGHT
 
+        self.last_time = None
+        self.frame_count = 0
+        self.fps_message = None
+
+        self.show_bytes = False
 
     def setup(self):
         self.player_list = arcade.SpriteList()
@@ -113,11 +121,10 @@ class NesGame(arcade.Window):
         self.player_sprite.center_y = TILE_HEIGHT // 2
         self.player_list.append(self.player_sprite)
 
-        self.load_level(self.level)
+        self.load_level()
 
-    def load_level(self, level):
+    def load_level(self):
         self.my_map = arcade.read_tiled_map('./Maps/level_{cur_l:0>8}.tmx'.format(cur_l=self.level), 1)
-        map_array = self.my_map.layers_int_data['Platforms']
         self.wall_list = arcade.generate_sprites(self.my_map, 'Platforms', 1)
         self.physics_engine = arcade.PhysicsEnginePlatformer(self.player_sprite,
                                                              self.wall_list,
@@ -125,11 +132,30 @@ class NesGame(arcade.Window):
         self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
 
     def on_draw(self):
+
+        self.frame_count += 1
         arcade.start_render()
 
         # Draw all the sprites.
         self.player_list.draw()
         self.wall_list.draw()
+
+        if self.last_time and self.frame_count % 60 == 0:
+            fps = 1.0 / (time.time() - self.last_time) * 60
+            self.fps_message = f"FPS: {fps:5.0f}"
+
+        if self.fps_message:
+            arcade.draw_text(self.fps_message, self.view_left + 10, self.view_bottom + 40, arcade.color.WHITE, 14)
+
+        if self.frame_count % 60 == 0:
+            self.last_time = time.time()
+        if self.show_bytes:
+            hex_block = self.my_map.layers_int_data['Platforms'][self.cur_block_y][round(self.cur_block_x/2)*2-4:round(self.cur_block_x/2)*2+32]
+            out = str(bytes(crunch_bytes(hex_block)))[2:-1]
+            v_l = self.view_left + TILE_WIDTH
+            arcade.draw_text(out[:2], v_l - 40, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.WHITE, 24)
+            arcade.draw_text(out[2], v_l, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.RED, 24)
+            arcade.draw_text(out[3:], v_l + 20, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.WHITE, 24)
 
     def on_key_press(self, key, modifiers):
         if key == arcade.key.UP:
@@ -144,10 +170,10 @@ class NesGame(arcade.Window):
             self.player_sprite.change_x = -MOVEMENT_SPEED
         if key == arcade.key.RIGHT:
             self.player_sprite.change_x = MOVEMENT_SPEED
-        if key == arcade.key.SPACE and self.my_map.layers_int_data['Platforms'][self.cur_block[0]][self.cur_block[1]]-1:
-            self.my_map.layers_int_data['Platforms'][self.cur_block[0]][self.cur_block[1]] -= 1
+        if key == arcade.key.SPACE and self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x]:
+            self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x] -= 1
             write_to_map(self.my_map.layers_int_data['Platforms'], level=self.level)
-            self.load_level(self.level)
+            self.load_level()
         if key == arcade.key.ESCAPE:
             arcade.close_window()
 
@@ -156,29 +182,29 @@ class NesGame(arcade.Window):
             self.player_sprite.change_x = 0
 
     def update(self, delta_time):
-        self.cur_block = int((self.player_sprite.bottom // 64)) - 64, int(self.player_sprite.left // 64) + 1
+        self.cur_block = self.cur_block_y, self.cur_block_x = int((self.player_sprite.bottom // 64)) - 64, int(self.player_sprite.left // 64) + 1
 
         def up_level():
             if self.level < self.max_level:
                 self.level += 1
-                self.load_level(self.level)
+                self.load_level()
                 self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
                 self.player_sprite.left = 0
             else:
                 self.level = 0
-                self.load_level(self.level)
+                self.load_level()
                 self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
                 self.player_sprite.left = 0
 
         def down_level():
             if self.level > 0:
                 self.level -= 1
-                self.load_level(self.level)
+                self.load_level()
                 self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
                 self.player_sprite.left = TILE_WIDTH * MAP_SIZE - 1
             else:
                 self.level = len(maps) - 1
-                self.load_level(self.level)
+                self.load_level()
                 self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
                 self.player_sprite.left = TILE_WIDTH * MAP_SIZE - 1
         if self.player_sprite.right >= self.end_of_map + TILE_WIDTH * 2:
@@ -234,13 +260,6 @@ def write_to_map(level_data, level):
             print(platforms, file=open_level)
 
 
-def mask_out_zeros(level_to_mask):
-    g = np.zeros(shape=level_to_mask, dtype=int)
-    for (row, col), value in np.ndenumerate(level_to_mask):
-        g[row, col] = value * (value > 4)
-    return g
-
-
 if __name__ == '__main__':
     maps = [np.reshape(i, (MAP_SIZE, MAP_SIZE)) for i in get_data(input_file=my_file)]
     for map_num, cur_map in enumerate(maps):
@@ -260,4 +279,6 @@ if __name__ == '__main__':
     with open(my_file, 'br+') as fw:
         for line in bury_data():
             fw.write(line)
+
+
 
