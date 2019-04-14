@@ -1,15 +1,15 @@
 import numpy as np
 import arcade
 import os
-import array
 import time
 
-my_file = 'Alice'
+my_file = 'A'
 
 map_dir = sorted([mf for mf in [mf for mf in os.listdir('./Maps') if os.path.isfile(os.path.join('./Maps', mf))] if
                   mf.endswith('.tmx')])
 for file in map_dir:
     os.remove('./Maps/{}'.format(file))
+
 MAP_SIZE = 64
 TILE_SIZE = TILE_WIDTH, TILE_HEIGHT = (64, 64)
 SCREEN_SIZE = SCREEN_WIDTH, SCREEN_HEIGHT = (TILE_WIDTH*16, TILE_HEIGHT*9)
@@ -24,6 +24,12 @@ VIEWPORT_LEFT_MARGIN = TILE_WIDTH * 6
 MOVEMENT_SPEED = 5
 JUMP_SPEED = 25
 GRAVITY = 1
+
+
+def crunch_bytes(vals_to_crunch):
+    #  pair hex values back together, turn that to an int
+    print(vals_to_crunch)
+    return [int(hex(v)[2] + hex(w)[2], 16) for v, w in zip(vals_to_crunch[::2], vals_to_crunch[1::2])]
 
 
 def get_data(input_file):
@@ -48,8 +54,8 @@ def get_data(input_file):
 
 def bury_data():
     final_out = []
-    for file in map_dir:
-        with open('./Maps/{}'.format(file)) as f:
+    for map_file in map_dir:
+        with open('./Maps/{}'.format(map_file)) as f:
             #  cur_rom_space will be a list of lists
             for cur_rom_sapce in f.read().split('\n')[6:-4]:
 
@@ -57,16 +63,8 @@ def bury_data():
                 cur_rom_line = list(filter(lambda a: a != -1, [(int(i)) for i in cur_rom_sapce.split(',')]))
 
                 if cur_rom_line:
-                    repaired = []
-                    #  pair up the hex values, in the pattern [1, 2] [3, 4]
-                    for v, w in zip(cur_rom_line[::2], cur_rom_line[1::2]):
-
-                        #  ex: [5, 1] becomes [51] becomes [0x33]. hex(x) is actually just a string of "0xXX"
-                        repaired.append(int(hex(v)[2]+hex(w)[2], 16))
-
-                    # turn the integers back into a byte string, and send it out
-                    final_out.append(array.array('B', repaired).tobytes())
-    return final_out
+                    final_out.append(cur_rom_line)
+    return [bytes(crunch_bytes(i)) for i in final_out]
 
 
 def gen_map_file(map_info, map_arr):
@@ -80,9 +78,6 @@ tilewidth="64" tileheight="64" infinite="0" nextlayerid="2" nextobjectid="1">
  </layer>
 </map>'''.format(map_info[0], map_info[1], map_arr)
     return header
-
-def crunch_bytes(bytes):
-    return [int(hex(v)[2] + hex(w)[2], 16) for v, w in zip(bytes[::2], bytes[1::2])]
 
 
 class NesGame(arcade.Window):
@@ -150,12 +145,15 @@ class NesGame(arcade.Window):
         if self.frame_count % 60 == 0:
             self.last_time = time.time()
         if self.show_bytes:
-            hex_block = self.my_map.layers_int_data['Platforms'][self.cur_block_y][round(self.cur_block_x/2)*2-4:round(self.cur_block_x/2)*2+32]
+            hex_block = self.my_map.layers_int_data['Platforms'][self.cur_block_y][round(self.cur_block_x/2)*2-2:round(self.cur_block_x/2)*2+4]
             out = str(bytes(crunch_bytes(hex_block)))[2:-1]
             v_l = self.view_left + TILE_WIDTH
-            arcade.draw_text(out[:2], v_l - 40, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.WHITE, 24)
-            arcade.draw_text(out[2], v_l, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.RED, 24)
-            arcade.draw_text(out[3:], v_l + 20, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.WHITE, 24)
+            try:
+                arcade.draw_text('{} {}'.format(out[:1], out[2:]), v_l - 20, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.WHITE, 24)
+                arcade.draw_text(out[1], v_l, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.RED, 24)
+            except:
+                pass
+
 
     def on_key_press(self, key, modifiers):
         if key == arcade.key.UP:
@@ -170,8 +168,12 @@ class NesGame(arcade.Window):
             self.player_sprite.change_x = -MOVEMENT_SPEED
         if key == arcade.key.RIGHT:
             self.player_sprite.change_x = MOVEMENT_SPEED
-        if key == arcade.key.SPACE and self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x]:
+        if key == arcade.key.S and self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x] > 0:
             self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x] -= 1
+            write_to_map(self.my_map.layers_int_data['Platforms'], level=self.level)
+            self.load_level()
+        if key == arcade.key.W and self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x] < 15:
+            self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x] += 1
             write_to_map(self.my_map.layers_int_data['Platforms'], level=self.level)
             self.load_level()
         if key == arcade.key.ESCAPE:
@@ -261,6 +263,7 @@ def write_to_map(level_data, level):
 
 
 if __name__ == '__main__':
+    start = time.time()
     maps = [np.reshape(i, (MAP_SIZE, MAP_SIZE)) for i in get_data(input_file=my_file)]
     for map_num, cur_map in enumerate(maps):
         np.savetxt("./Maps/map_data.csv", cur_map, delimiter=",", fmt='%s')
@@ -268,7 +271,7 @@ if __name__ == '__main__':
             platforms = gen_map_file(cur_map.shape, map_data.read())
             with open('./Maps/level_{0:0>8}.tmx'.format(map_num), 'w') as map_level:
                 print(platforms, file=map_level)
-
+    print(time.time() - start)
     main()
 
     with open(my_file, 'br+') as src_file:
@@ -277,8 +280,10 @@ if __name__ == '__main__':
             backup.close()
         src_file.write(b'')
     with open(my_file, 'br+') as fw:
+        start = time.time()
         for line in bury_data():
             fw.write(line)
+        print(time.time() - start)
 
 
 
