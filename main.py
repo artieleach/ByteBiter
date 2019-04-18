@@ -2,8 +2,11 @@ import numpy as np
 import arcade
 import os
 import time
+from functools import lru_cache
 
-my_file = 'A'
+my_file = 'smb3.nes'
+
+file_size = 0
 
 map_dir = sorted([mf for mf in [mf for mf in os.listdir('./Maps') if os.path.isfile(os.path.join('./Maps', mf))] if
                   mf.endswith('.tmx')])
@@ -26,45 +29,55 @@ JUMP_SPEED = 25
 GRAVITY = 1
 
 
-def crunch_bytes(vals_to_crunch):
-    #  pair hex values back together, turn that to an int
-    print(vals_to_crunch)
-    return [int(hex(v)[2] + hex(w)[2], 16) for v, w in zip(vals_to_crunch[::2], vals_to_crunch[1::2])]
+@lru_cache(None)
+def byte_to_hex(pair):
+    val = hex(pair)[2:].zfill(2)
+    return int(val[0], 16), int(val[1].zfill(1), 16)
 
 
-def get_data(input_file):
+@lru_cache(None)
+def hex_to_byte(pair):
+    return bytes([int(hex(pair[0])[2] + hex(pair[1])[2], 16)])
+
+
+def file_to_levels(input_file=my_file):
     with open(input_file, 'rb') as input_data:
         # convert int (255) -> hex (0xff) -> two hex values (0x0f, 0x0f) -> two int values -> (15, 15) -> add 1 to each
-        mario_rom = []
-        for i in input_data.read():
-            v = hex(i)[2:].zfill(2)
-            mario_rom.append([int(v[0], 16), int(v[1].zfill(1), 16)])
-
-    # unzip
-    mario_rom = [item for sublist in mario_rom for item in sublist]
+        mario_rom = [item for sublist in [byte_to_hex(i) for i in input_data.read()] for item in sublist]
 
     # split the data
-    composite_list = [mario_rom[x:x+MAP_SIZE**2] for x in range(0, len(mario_rom), MAP_SIZE**2)]
+    level_map_data = [mario_rom[x:x+MAP_SIZE**2] for x in range(0, len(mario_rom), MAP_SIZE**2)]
+    # pad the last map with empty space, so all maps are the same size
+    level_map_data[-1] += [-1] * (MAP_SIZE**2 - len(level_map_data[-1]))
+    maps = [np.reshape(i, (MAP_SIZE, MAP_SIZE)) for i in level_map_data]
+    for map_num, cur_map in enumerate(maps):
+        np.savetxt("./Maps/map_data.csv", cur_map, delimiter=",", fmt='%s')
+        with open('./Maps/map_data.csv') as map_data:
+            platforms = gen_map_file(cur_map.shape, map_data.read())
+        with open('./Maps/level_{0:0>8}.tmx'.format(map_num), 'w') as map_level:
+            print(platforms, file=map_level)
+    global file_size
+    file_size = len(maps) - 1
+    return
 
-    # pad the last map with zeros, so all maps are the same size
-    composite_list[-1] += [-1] * (MAP_SIZE**2 - len(composite_list[-1]))
 
-    return composite_list
-
-
-def bury_data():
-    final_out = []
+def levels_to_file(input_file=my_file):
+    paired_data = []
     for map_file in map_dir:
         with open('./Maps/{}'.format(map_file)) as f:
             #  cur_rom_space will be a list of lists
-            for cur_rom_sapce in f.read().split('\n')[6:-4]:
-
-                #  remove all -1's, AKA filler, from each line.
-                cur_rom_line = list(filter(lambda a: a != -1, [(int(i)) for i in cur_rom_sapce.split(',')]))
-
-                if cur_rom_line:
-                    final_out.append(cur_rom_line)
-    return [bytes(crunch_bytes(i)) for i in final_out]
+            cur_rom_space = [(int(i)) for i in ','.join(f.read().split('\n')[6:-4]).split(',') if i != '-1' and i != '']
+            paired_data.append(list(zip(cur_rom_space[::2], cur_rom_space[1::2])))
+    output_data = [b''.join([hex_to_byte(val) for val in rom_item]) for rom_item in paired_data]
+    if not os.path.isfile('{}.bak'.format(input_file)):
+        with open(input_file, 'br+') as src_file:
+            with open('{}.bak'.format(input_file), 'wb') as backup:
+                backup.write(src_file.read())
+            src_file.write(b'')
+    with open(input_file, 'br+') as fw:
+        for line in output_data:
+            fw.write(line)
+    return
 
 
 def gen_map_file(map_info, map_arr):
@@ -98,7 +111,7 @@ class NesGame(arcade.Window):
         self.my_map = None
 
         self.level = 0
-        self.max_level = len(maps) - 1
+        self.max_level = file_size
 
         self.end_of_map = MAP_SIZE * TILE_HEIGHT
 
@@ -106,7 +119,7 @@ class NesGame(arcade.Window):
         self.frame_count = 0
         self.fps_message = None
 
-        self.show_bytes = False
+        self.show_bytes = True
 
     def setup(self):
         self.player_list = arcade.SpriteList()
@@ -145,15 +158,14 @@ class NesGame(arcade.Window):
         if self.frame_count % 60 == 0:
             self.last_time = time.time()
         if self.show_bytes:
-            hex_block = self.my_map.layers_int_data['Platforms'][self.cur_block_y][round(self.cur_block_x/2)*2-2:round(self.cur_block_x/2)*2+4]
-            out = str(bytes(crunch_bytes(hex_block)))[2:-1]
+            hex_block = self.my_map.layers_int_data['Platforms'][self.cur_block_y][round(self.cur_block_x/2)*2:round(self.cur_block_x/2)*2+2]
+            out = str(bytes(hex_to_byte(tuple(hex_block))))[2:-1]
             v_l = self.view_left + TILE_WIDTH
             try:
                 arcade.draw_text('{} {}'.format(out[:1], out[2:]), v_l - 20, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.WHITE, 24)
                 arcade.draw_text(out[1], v_l, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.RED, 24)
             except:
                 pass
-
 
     def on_key_press(self, key, modifiers):
         if key == arcade.key.UP:
@@ -247,7 +259,6 @@ class NesGame(arcade.Window):
                                 self.view_bottom,
                                 SCREEN_HEIGHT + self.view_bottom)
 
-
 def main():
     window = NesGame()
     window.setup()
@@ -255,35 +266,17 @@ def main():
 
 
 def write_to_map(level_data, level):
-    np.savetxt("./Maps/map_data.csv", np.asarray(level_data), delimiter=",", fmt='%s')
-    with open('./Maps/map_data.csv') as map_data:
-        platforms = gen_map_file((MAP_SIZE, MAP_SIZE), map_data.read())
+    np.savetxt("./Maps/map_data.csv", level_data, delimiter=",", fmt='%s')  # if something breaks, put np.asarray() around level_data
+    with open('./Maps/map_data.csv') as map_data_file:
+        platforms = gen_map_file((MAP_SIZE, MAP_SIZE), map_data_file.read())
         with open('./Maps/level_{cur_l:0>8}.tmx'.format(cur_l=level), 'w') as open_level:
             print(platforms, file=open_level)
 
 
 if __name__ == '__main__':
-    start = time.time()
-    maps = [np.reshape(i, (MAP_SIZE, MAP_SIZE)) for i in get_data(input_file=my_file)]
-    for map_num, cur_map in enumerate(maps):
-        np.savetxt("./Maps/map_data.csv", cur_map, delimiter=",", fmt='%s')
-        with open('./Maps/map_data.csv') as map_data:
-            platforms = gen_map_file(cur_map.shape, map_data.read())
-            with open('./Maps/level_{0:0>8}.tmx'.format(map_num), 'w') as map_level:
-                print(platforms, file=map_level)
-    print(time.time() - start)
+    file_to_levels(my_file)
     main()
-
-    with open(my_file, 'br+') as src_file:
-        with open('{}.bak'.format(my_file), 'wb') as backup:
-            backup.write(src_file.read())
-            backup.close()
-        src_file.write(b'')
-    with open(my_file, 'br+') as fw:
-        start = time.time()
-        for line in bury_data():
-            fw.write(line)
-        print(time.time() - start)
+    levels_to_file(my_file)
 
 
 
