@@ -118,6 +118,19 @@ def write_to_map(level_data, level):
             print(platforms, file=open_level)
 
 
+def gen_item_menu(loi):
+    # create a blank array
+    menu = np.zeros((MAP_SIZE, MAP_SIZE), dtype=int)
+    for item_pos, list_item in enumerate(loi):
+        # convert each menu item into data, then flatten the data
+        hex_list_item = [item for sublist in [byte_to_hex(i) for i in list_item] for item in sublist]
+        item_len = len(hex_list_item)
+        # place each menu item on the array, skipping lines
+        menu[item_pos*2, 0:item_len] = hex_list_item
+    # make it into a map and send it out
+    return gen_map_file((MAP_SIZE, MAP_SIZE), menu)
+
+
 class NesGame(arcade.Window):
     def __init__(self):
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
@@ -144,6 +157,7 @@ class NesGame(arcade.Window):
         self.frame_count = 0
         self.fps_message = None
 
+        self.pause = False
         self.show_bytes = False
 
     def setup(self):
@@ -213,31 +227,33 @@ class NesGame(arcade.Window):
             self.load_level()
         if key == arcade.key.ESCAPE:
             arcade.close_window()
+        if key == arcade.key.P:
+            self.pause = not self.pause
 
     def on_key_release(self, key, modifiers):
         if key == arcade.key.LEFT or key == arcade.key.RIGHT:
             self.player_sprite.change_x = 0
 
     def update(self, delta_time):
+        if self.pause:
+            return
         self.cur_block = self.cur_block_y, self.cur_block_x = MAP_SIZE - int((self.player_sprite.bottom // TILE_HEIGHT)), int(self.player_sprite.left // TILE_WIDTH) + 1
 
         def up_level():
             if self.level < self.max_level:
                 self.level += 1
-                self.load_level()
             else:
                 self.level = 0
-                self.load_level()
+            self.load_level()
             self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
             self.player_sprite.left = 0
 
         def down_level():
             if self.level > 0:
                 self.level -= 1
-                self.load_level()
             else:
                 self.level = file_size
-                self.load_level()
+            self.load_level()
             self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
             self.player_sprite.left = TILE_WIDTH * MAP_SIZE - 1
         if self.player_sprite.right >= self.end_of_map + TILE_WIDTH * 2:
