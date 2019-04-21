@@ -3,27 +3,7 @@ import arcade
 import os
 import time
 from functools import lru_cache
-
-my_file = 'Alice'
-
-file_size = 0
-
-map_dir = sorted([mf for mf in [mf for mf in os.listdir('./Maps') if os.path.isfile(os.path.join('./Maps', mf))] if
-                  mf.endswith('.tmx')])
-for file in map_dir:
-    os.remove('./Maps/{}'.format(file))
-
-MAP_SIZE = 64
-map_header = '''<?xml version="1.0" encoding="UTF-8"?>
-<map version="1.2" tiledversion="1.2.3" orientation="orthogonal" renderorder="right-down" width="{0}" height="{0}" 
-tilewidth="64" tileheight="64" infinite="0" nextlayerid="2" nextobjectid="1">
- <tileset firstgid="1" source="./tiles.tsx"/>
- <layer id="1" name="Platforms" width="{0}" height="{0}">
-  <data encoding="csv">'''.format(MAP_SIZE)
-
-map_footer = '''</data>
- </layer>
-</map>'''
+from multiprocessing import Process
 
 TILE_SIZE = TILE_WIDTH, TILE_HEIGHT = (64, 64)
 SCREEN_SIZE = SCREEN_WIDTH, SCREEN_HEIGHT = (TILE_WIDTH*16, TILE_HEIGHT*9)
@@ -34,10 +14,33 @@ VIEWPORT_MARGIN_BOTTOM = TILE_HEIGHT * 3
 VIEWPORT_RIGHT_MARGIN = TILE_WIDTH * 6
 VIEWPORT_LEFT_MARGIN = TILE_WIDTH * 6
 
+MAP_SIZE = 64
 
-MOVEMENT_SPEED = 5
+MOVEMENT_SPEED = 10
 JUMP_SPEED = 25
 GRAVITY = 1
+
+GAME_RUNNING = True
+
+MY_FILE = 'Alice'
+
+file_size = 0
+
+map_dir = sorted([mf for mf in [mf for mf in os.listdir('./Maps') if os.path.isfile(os.path.join('./Maps', mf))] if
+                  mf.endswith('.tmx')])
+for file in map_dir:
+    os.remove('./Maps/{}'.format(file))
+
+map_header = '''<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.2" tiledversion="1.2.3" orientation="orthogonal" renderorder="right-down" width="{0}" height="{0}" 
+tilewidth="64" tileheight="64" infinite="0" nextlayerid="2" nextobjectid="1">
+ <tileset firstgid="1" source="./tiles.tsx"/>
+ <layer id="1" name="Platforms" width="{0}" height="{0}">
+  <data encoding="csv">'''.format(MAP_SIZE)
+
+map_footer = '''</data>
+ </layer>
+</map>'''
 
 
 @lru_cache(None)
@@ -51,7 +54,7 @@ def hex_to_byte(pair):
     return bytes([int(hex(pair[0])[2] + hex(pair[1])[2], 16)])
 
 
-def file_to_levels(input_file=my_file):
+def file_to_levels(input_file=MY_FILE):
     global file_size
     with open(input_file, 'rb') as input_data:
         # convert int (255) -> hex (0xff) -> two hex values (0x0f, 0x0f) -> two int values -> (15, 15) -> add 1 to each
@@ -71,7 +74,7 @@ def file_to_levels(input_file=my_file):
     return
 
 
-def levels_to_file(input_file=my_file):
+def levels_to_file(input_file=MY_FILE):
     paired_data = []
     for map_file in map_dir:
         with open('./Maps/{}'.format(map_file)) as f:
@@ -111,12 +114,13 @@ tilewidth="64" tileheight="64" infinite="0" nextlayerid="2" nextobjectid="1">
 
 
 def write_to_map(level_data, level):
-    np.savetxt("./Maps/map_data.csv", level_data, delimiter=",", fmt='%s')
-    with open('./Maps/map_data.csv') as map_data_file:
-        platforms = gen_map_file((MAP_SIZE, MAP_SIZE), map_data_file.read())
-        with open('./Maps/level_{cur_l:0>8}.tmx'.format(cur_l=level), 'w') as open_level:
-            print(platforms, file=open_level)
+    np.savetxt('./Maps/level_{cur_l:0>8}.tmx'.format(cur_l=level), level_data, delimiter=",", fmt='%s', header=map_header, footer=map_footer, comments='')
 
+
+def write_wrapper():
+    while GAME_RUNNING:
+        levels_to_file()
+        file_to_levels()
 
 def gen_item_menu(loi):
     # create a blank array
@@ -128,7 +132,8 @@ def gen_item_menu(loi):
         # place each menu item on the array, skipping lines
         menu[item_pos*2, 0:item_len] = hex_list_item
     # make it into a map and send it out
-    return gen_map_file((MAP_SIZE, MAP_SIZE), menu)
+    np.savetxt('./Maps/Menu.tmx', menu, delimiter=",", fmt='%s', header=map_header, footer=map_footer, comments='')
+    return
 
 
 class NesGame(arcade.Window):
@@ -167,16 +172,18 @@ class NesGame(arcade.Window):
         self.player_sprite.center_x = TILE_WIDTH // 2
         self.player_sprite.center_y = TILE_HEIGHT // 2
         self.player_list.append(self.player_sprite)
+        self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
 
         self.load_level()
 
     def load_level(self):
+        start = time.time()
         self.my_map = arcade.read_tiled_map('./Maps/level_{cur_l:0>8}.tmx'.format(cur_l=self.level), 1)
         self.wall_list = arcade.generate_sprites(self.my_map, 'Platforms', 1)
         self.physics_engine = arcade.PhysicsEnginePlatformer(self.player_sprite,
                                                              self.wall_list,
                                                              gravity_constant=GRAVITY)
-        self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
+        print(time.time()-start)
 
     def on_draw(self):
 
@@ -205,6 +212,7 @@ class NesGame(arcade.Window):
             arcade.draw_text(str(b''.join([hex_to_byte(tuple(i)) for i in list(zip(hex_block[::2], hex_block[1::2]))]))[2:-1], v_l, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.WHITE, 24)
 
     def on_key_press(self, key, modifiers):
+        global GAME_RUNNING
         if key == arcade.key.UP:
             if self.physics_engine.can_jump() or True:
                 self.player_sprite.change_y = JUMP_SPEED
@@ -226,9 +234,11 @@ class NesGame(arcade.Window):
             write_to_map(self.my_map.layers_int_data['Platforms'], level=self.level)
             self.load_level()
         if key == arcade.key.ESCAPE:
+            GAME_RUNNING = False
             arcade.close_window()
         if key == arcade.key.P:
             self.pause = not self.pause
+            GAME_RUNNING = self.pause
 
     def on_key_release(self, key, modifiers):
         if key == arcade.key.LEFT or key == arcade.key.RIGHT:
@@ -245,7 +255,6 @@ class NesGame(arcade.Window):
             else:
                 self.level = 0
             self.load_level()
-            self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
             self.player_sprite.left = 0
 
         def down_level():
@@ -254,7 +263,6 @@ class NesGame(arcade.Window):
             else:
                 self.level = file_size
             self.load_level()
-            self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
             self.player_sprite.left = TILE_WIDTH * MAP_SIZE - 1
         if self.player_sprite.right >= self.end_of_map + TILE_WIDTH * 2:
             up_level()
@@ -302,8 +310,10 @@ def main():
 
 
 if __name__ == '__main__':
-    start_time = time.time()
-    file_to_levels(my_file)
-    print(time.time()-start_time)
-    main()
-    levels_to_file(my_file)
+    file_to_levels()
+    p1 = Process(target=write_wrapper)
+    p2 = Process(target=main)
+    p1.start()
+    p2.start()
+    p1.join()
+    p2.join()
