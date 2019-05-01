@@ -20,10 +20,9 @@ MOVEMENT_SPEED = 10
 JUMP_SPEED = 25
 GRAVITY = 1
 
-
 MY_FILE = 'Alice'
 
-file_size = 0
+NUM_OF_MAPS = 0
 
 map_dir = sorted([mf for mf in [mf for mf in os.listdir('./Maps') if os.path.isfile(os.path.join('./Maps', mf))] if
                   mf.endswith('.tmx')])
@@ -63,7 +62,7 @@ def hex_to_byte(pair):
 
 
 def file_to_levels(input_file=MY_FILE):
-    global file_size
+    global NUM_OF_MAPS
     with open(input_file, 'rb') as input_data:
         # convert int (255) -> hex (0xff) -> two hex values (0x0f, 0x0f) -> two int values -> (15, 15) -> add 1 to each
         mario_rom = [item for sublist in [byte_to_hex(i) for i in input_data.read()] for item in sublist]
@@ -82,23 +81,25 @@ def file_to_levels(input_file=MY_FILE):
         write_to_map(cur_map, 'level_{0:0>8}.tmx'.format(map_num))
 
     # counting starts at 0, so len is 1 too high
-    file_size = len(maps) - 1
+    NUM_OF_MAPS = len(maps) - 1
     return
 
 
-def levels_to_file(input_file=MY_FILE):
+def levels_to_file(input_file=MY_FILE, changed_block=None):
     paired_data = []
-    for map_file in map_dir:
-        with open('./Maps/{}'.format(map_file)) as f:
-            #  cur_rom_space will be a list of lists, looking like [[4, 1, 6, 9...]...]
-            cur_rom_space = [(int(i)) for i in ','.join(f.read().split('\n')[6:-4]).split(',') if i != '-1' and i != '']
+    if not changed_block:
+        for map_file in map_dir:
+            with open('./Maps/{}'.format(map_file)) as f:
+                #  cur_rom_space will be a list of lists, looking like [[4, 1, 6, 9...]...]
+                cur_rom_space = [(int(i)) for i in ','.join(f.read().split('\n')[6:-4]).split(',') if i != '-1' and i != '']
 
-            # re pair up the nums, so its [[41, 69...]...]
-            paired_data.append(list(zip(cur_rom_space[::2], cur_rom_space[1::2])))
+                # re pair up the nums, so it's [[41, 69], [42, 20]...]
+                paired_data.append(list(zip(cur_rom_space[::2], cur_rom_space[1::2])))
 
-    # de-nest the lists, and convert the pairs back into bytes
-    output_data = [b''.join([hex_to_byte(val) for val in rom_item]) for rom_item in paired_data]
-
+        # de-nest the lists, and convert the pairs back into bytes, then string them all together.
+        output_data = [b''.join([hex_to_byte(val) for val in rom_item]) for rom_item in paired_data]
+    else:
+        pass
     # if there is not a backup file, create one.
     if not os.path.isfile('{}.bak'.format(input_file)):
         with open(input_file, 'br+') as src_file:
@@ -112,23 +113,31 @@ def levels_to_file(input_file=MY_FILE):
     return
 
 
-
 def write_wrapper():
     while True:
-        levels_to_file()
-        file_to_levels()
-        time.sleep(1)
+        try:
+            if NesGame.need_update:
+                print('called')
+                levels_to_file()
+                file_to_levels()
+                NesGame.need_update = False
+        except AttributeError:
+            time.sleep(1)
 
 
 def gen_item_menu(menu_items):
     # create a blank array
     menu = np.zeros((MAP_SIZE, MAP_SIZE), dtype=int)
+
     for item_pos, list_item in enumerate(menu_items):
+
         # convert each menu item into data, then flatten the data
         hex_list_item = [item for sublist in [byte_to_hex(i) for i in list_item] for item in sublist]
-        item_len = len(hex_list_item)
+
         # place each menu item on the array, skipping lines
+        item_len = len(hex_list_item)
         menu[item_pos*2, 0:item_len] = hex_list_item
+
     # make it into a map and send it out
     write_to_map(menu, 'Menu.tmx')
     return
@@ -152,7 +161,7 @@ class NesGame(arcade.Window):
         self.my_map = None
 
         self.level = 0
-        self.max_level = file_size
+        self.max_level = NUM_OF_MAPS
 
         self.end_of_map = MAP_SIZE * TILE_HEIGHT
 
@@ -162,6 +171,8 @@ class NesGame(arcade.Window):
 
         self.pause = False
         self.show_bytes = False
+
+        self.need_update = False
 
     def setup(self):
         self.player_list = arcade.SpriteList()
@@ -175,6 +186,7 @@ class NesGame(arcade.Window):
         self.load_level()
 
     def load_level(self):
+        self.need_update = True
         self.my_map = arcade.read_tiled_map('./Maps/level_{cur_l:0>8}.tmx'.format(cur_l=self.level), 1)
         self.wall_list = arcade.generate_sprites(self.my_map, 'Platforms', 1)
         self.physics_engine = arcade.PhysicsEnginePlatformer(self.player_sprite,
@@ -254,7 +266,7 @@ class NesGame(arcade.Window):
             if self.level > 0:
                 self.level -= 1
             else:
-                self.level = file_size
+                self.level = NUM_OF_MAPS
             self.load_level()
             self.player_sprite.left = TILE_WIDTH * MAP_SIZE - 1
         if self.player_sprite.right >= self.end_of_map + TILE_WIDTH * 2:
@@ -295,12 +307,9 @@ class NesGame(arcade.Window):
                                 self.view_bottom,
                                 SCREEN_HEIGHT + self.view_bottom)
 
-    @staticmethod
-    def write_wrapper():
-        while True:
-            levels_to_file()
-            file_to_levels()
-            time.sleep(1)
+    def on_close(self):
+        print('here')
+        arcade.close_window()
 
 
 def main():
@@ -311,11 +320,10 @@ def main():
 
 if __name__ == '__main__':
     file_to_levels()
-    wm_process = Process(target=write_wrapper)
+
     game_process = Process(target=main)
-    wm_process.start()
+    write_process = Process(target=write_wrapper)
     game_process.start()
+    write_process.start()
     game_process.join()
-    wm_process.join()
-
-
+    write_process.join()
