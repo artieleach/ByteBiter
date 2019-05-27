@@ -20,7 +20,7 @@ MOVEMENT_SPEED = 10
 JUMP_SPEED = 25
 GRAVITY = 1
 
-MY_FILE = 'Alice'
+MY_FILE = 'main.py'
 
 NUM_OF_MAPS = 0
 
@@ -112,7 +112,7 @@ def levels_to_file(input_file=MY_FILE, changed_block=None):
             fw.write(line)
     return
 
-
+# This is all horribly broken.
 def write_wrapper():
     while True:
         try:
@@ -149,11 +149,13 @@ class NesGame(arcade.Window):
         file_path = os.path.dirname(os.path.abspath(__file__))
         os.chdir(file_path)
 
+        # Player stuff
         self.cur_block = self.cur_block_y, self.cur_block_x = (0, 0)
         self.wall_list = None
         self.player_list = None
         self.player_sprite = None
 
+        # Game stuff
         self.physics_engine = None
         self.view_left = 0
         self.view_bottom = 0
@@ -210,7 +212,7 @@ class NesGame(arcade.Window):
 
         if self.frame_count % 60 == 0:
             self.last_time = time.time()
-        if self.show_bytes:
+        if self.show_bytes or True:
             try:
                 hex_block = self.my_map.layers_int_data['Platforms'][self.cur_block_y][abs(round(self.cur_block_x/2)*2 - 2):round(self.cur_block_x/2)*2+10]
             except IndexError:
@@ -220,6 +222,7 @@ class NesGame(arcade.Window):
 
     def on_key_press(self, key, modifiers):
         if key == arcade.key.UP:
+            # Currently there's little restriction on movement, so i can bounce around more easily.
             if self.physics_engine.can_jump() or True:
                 self.player_sprite.change_y = JUMP_SPEED
         if key == arcade.key.DOWN:
