@@ -1,3 +1,5 @@
+"""Mian file for ByteBiter, a game wherein you explore files. Based off a bug from SMB2"""
+
 import time
 import os
 from functools import lru_cache
@@ -23,7 +25,9 @@ MY_FILE = 'Alice'
 
 SCREEN_TITLE = MY_FILE.split('.')[0]
 
-MAP_DIR = sorted([mf for mf in [mf for mf in os.listdir('./Maps') if os.path.isfile(os.path.join('./Maps', mf))] if mf.endswith('.tmx') and 'level' in mf])
+MAP_DIR = sorted([mf for mf in
+                  [mf for mf in os.listdir('./Maps') if os.path.isfile(os.path.join('./Maps', mf))]
+                  if mf.endswith('.tmx') and 'level' in mf])
 for file in MAP_DIR:
     os.remove(f'./Maps/{file}')
 
@@ -41,22 +45,35 @@ MAP_FOOTER = '''</data>
 
 def write_map(level_data, level):
     """Generate a "valid" tmx file, though due to differences in EOL characters
-    it cannot be opened with Tiled. Works for my purposes regardless."""
+    it cannot be opened with Tiled. Works for my purposes regardless.
+
+    :param level_data: a numpy array of integers
+    :param level: the filename
+    """
     np.savetxt(f'./Maps/{level}', level_data, delimiter=",", fmt='%s',
                header=MAP_HEADER, footer=MAP_FOOTER, comments='')
 
 
-@lru_cache(None)
+@lru_cache(256)
 def byte_to_hex(pair):
-    """Converts a pair of bytes into a pair of hex values."""
+    """Converts a pair of bytes into a pair of hex values.
+
+    :param pair: a pair of bytes
+    :returns: a pair of hex values
+
+    """
     # (0xa, 0xb) -> (10, 11)
     val = hex(pair)[2:].zfill(2)
     return int(val[0], 16), int(val[1].zfill(1), 16)
 
 
-@lru_cache(None)
+@lru_cache(256)
 def hex_to_byte(pair):
-    """Converts a pair of hex values into a pair of bytes."""
+    """Converts a pair of bytes into a pair of hex values.
+    :param pair: a pair of hex values
+    :returns: a pair of bytes
+
+    """
     # (10, 10) -> (0xa, 0xa)
     if -1 in pair:
         return b' '
@@ -69,9 +86,9 @@ def get_block(coord: int):
     return int(coord // TILE_H * TILE_H)
 
 
-def file_to_levels(input_file=MY_FILE):
+def file_to_levels():
     """Converts a binary file into a TMX level."""
-    with open(input_file, 'rb') as input_data:
+    with open(MY_FILE, 'rb') as input_data:
         # int (255) -> hex (0xff) -> two hex values (0x0f, 0x0f) -> two int values -> (15, 15)
         rom = [item for sublist in [byte_to_hex(i) for i in input_data.read()] for item in sublist]
 
@@ -91,7 +108,7 @@ def file_to_levels(input_file=MY_FILE):
     # counting starts at 0, so len is 1 too high
 
 
-def levels_to_file(input_file=MY_FILE):
+def levels_to_file():
     """Converts TMX level data into a binary file."""
     paired_data = []
     for map_file in MAP_DIR:
@@ -109,13 +126,13 @@ def levels_to_file(input_file=MY_FILE):
     output_data = [b''.join([hex_to_byte(val) for val in rom_item]) for rom_item in paired_data]
 
     # if there is not a backup file, create one.
-    if not os.path.isfile(f'{input_file}.bak'):
-        with open(input_file, 'br+') as src_file:
-            with open(f'{input_file}.bak', 'wb') as backup:
+    if not os.path.isfile(f'{MY_FILE}.bak'):
+        with open(MY_FILE, 'br+') as src_file:
+            with open(f'{MY_FILE}.bak', 'wb') as backup:
                 backup.write(src_file.read())
 
     # write over the old data with the new
-    with open(input_file, 'br+') as cur_map:
+    with open(MY_FILE, 'br+') as cur_map:
         for line in output_data:
             cur_map.write(line)
 
@@ -152,13 +169,15 @@ class NesGame(arcade.Window):
     """The game function. Produces a scene with:
     - A hexadecimal representation of a given file
     - A player sprite capable of making arbitrary modifications to the representation"""
+
+    # pylint: disable=too-many-instance-attributes
     def __init__(self):
         super().__init__(SCREEN_W, SCREEN_H, SCREEN_TITLE)
         file_path = os.path.dirname(os.path.abspath(__file__))
         os.chdir(file_path)
 
         # Player stuff
-        self.cur_block_y, self.cur_block_x = (0, 0)
+        self.p_block_y, self.p_block_x = (0, 0)
         self.wall_list = None
         self.player_list = None
         self.player_sprite = None
@@ -197,8 +216,7 @@ class NesGame(arcade.Window):
         self.physics_engine.enable_multi_jump(1)
 
     def on_draw(self):
-        """Draws the player, walls, current text, and FPS.
-        TODO: move all the math somewhere else."""
+        """Draws the player, walls, current text, and FPS."""
 
         arcade.start_render()
         # Draw all the sprites.
@@ -210,54 +228,60 @@ class NesGame(arcade.Window):
                                                             self.player_sprite.bottom,
                                                             self.player_sprite.bottom - TILE_H]),
                                            color=[255, 00, 00, 100], border_width=8)
-        try:
-            byte_x = round(self.cur_block_x/2) * 2
-            if byte_x < 2:
-                byte_x = 2
-            hex_block = self.my_map.layers_int_data['Platforms'][self.cur_block_y][byte_x-2:byte_x+10]
-        except IndexError:
-            hex_block = [0, 0]
-        arcade.draw_text(str(b''.join([hex_to_byte(tuple(i)) for i in list(zip(hex_block[::2], hex_block[1::2]))])).replace('\\x00', ' ')[2:-1], self.view_left + TILE_W, self.view_bottom + SCREEN_H - TILE_H, arcade.color.WHITE, 24)
 
-    def on_key_press(self, key, modifiers):
-        """Called when a key is pressed
+        # grab the pair of blocks that the player is standing on
+        byte_x = round(self.p_block_x/2) * 2
+        if byte_x < 2:
+            # ensure the pair is above 2 so everything renders properly
+            byte_x = 2
+        # grab five blocks, starting right behind the player
+        hex_block = self.my_map.layers_int_data['Platforms'][self.p_block_y][byte_x-2:byte_x+10]
+        # pair them all up and get their byte-string representations
+        paired_blocks = [hex_to_byte(tuple(i)) for i in list(zip(hex_block[::2], hex_block[1::2]))]
+        # do some formatting and draw the text on screen
+        arcade.draw_text(str(b''.join(paired_blocks)).replace('\\x00', ' ')[2:-1],
+                         self.view_left + TILE_W, self.view_bottom + SCREEN_H - TILE_H,
+                         arcade.color.WHITE, 24)
+
+    def on_key_press(self, symbol, modifiers):
+        """Called when a symbol is pressed
 
         UP      -   Jump
         DOWN    -   either fall to the ground if the player is in the air
                     or go down a row of blocks
         LEFT    -   Move the player left, currently there is no acceleration
-        RIGHT   -   Move the player right, currently there is no acceletation
+        RIGHT   -   Move the player right, currently there is no acceleration
         W       -   Change the value of the block the player is standing on up by one
         S       -   Change the value of the block the player is standing on down by one
 
         """
-        cur_block = self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x]
-        if key == arcade.key.UP:
+        cur_block = self.my_map.layers_int_data['Platforms'][self.p_block_y][self.p_block_x]
+        if symbol == arcade.key.UP:
             if self.physics_engine.can_jump():
                 self.player_sprite.change_y = JUMP_SPEED
-        if key == arcade.key.DOWN:
+        if symbol == arcade.key.DOWN:
             if self.physics_engine.can_jump():
                 self.player_sprite.bottom -= 128
             else:
                 self.player_sprite.change_y -= 32
-        if key == arcade.key.LEFT:
+        if symbol == arcade.key.LEFT:
             self.player_sprite.change_x = -MOVEMENT_SPEED
-        if key == arcade.key.RIGHT:
+        if symbol == arcade.key.RIGHT:
             self.player_sprite.change_x = MOVEMENT_SPEED
-        if key == arcade.key.S and cur_block > 0:
-            self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x] -= 1
+        if symbol == arcade.key.S and cur_block > 0:
+            self.my_map.layers_int_data['Platforms'][self.p_block_y][self.p_block_x] -= 1
             write_map(self.my_map.layers_int_data['Platforms'], level=f'level_{self.level:0>8}.tmx')
             self.load_level()
-        if key == arcade.key.W and cur_block < 15:
-            self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x] += 1
+        if symbol == arcade.key.W and cur_block < 15:
+            self.my_map.layers_int_data['Platforms'][self.p_block_y][self.p_block_x] += 1
             write_map(self.my_map.layers_int_data['Platforms'], level=f'level_{self.level:0>8}.tmx')
             self.load_level()
-        if key == arcade.key.ESCAPE:
+        if symbol == arcade.key.ESCAPE:
             arcade.close_window()
 
-    def on_key_release(self, key, modifiers):
+    def on_key_release(self, symbol, modifiers):
         """Stops the players movement when LEFT or RIGHT are released"""
-        if key in (arcade.key.LEFT, arcade.key.RIGHT):
+        if symbol in (arcade.key.LEFT, arcade.key.RIGHT):
             self.player_sprite.change_x = 0
 
     def update(self, delta_time):
@@ -267,8 +291,8 @@ class NesGame(arcade.Window):
         deciding which block the player is standing on,
         and moving the camera.
         """
-        self.cur_block_y = MAP_SIZE - get_block(self.player_sprite.bottom) // TILE_H
-        self.cur_block_x = get_block(self.player_sprite.left) // TILE_W + 1
+        self.p_block_y = MAP_SIZE - get_block(self.player_sprite.bottom) // TILE_H
+        self.p_block_x = get_block(self.player_sprite.left) // TILE_W + 1
 
         def up_level():
             if self.level < len(MAP_DIR) - 1:
@@ -285,6 +309,7 @@ class NesGame(arcade.Window):
                 self.level = len(MAP_DIR) - 1
             self.load_level()
             self.player_sprite.left = TILE_W * MAP_SIZE - 1
+
         if self.player_sprite.right >= self.end_of_map + TILE_W * 2:
             up_level()
         if self.player_sprite.left <= -(TILE_W * 2):
