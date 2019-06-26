@@ -1,55 +1,54 @@
+import time
+import os
+from functools import lru_cache
+import multiprocessing as mp
 import numpy as np
 import arcade
-import os
-import time
-from functools import lru_cache
-from multiprocessing import Process
 
-TILE_SIZE = TILE_WIDTH, TILE_HEIGHT = (64, 64)
-SCREEN_SIZE = SCREEN_WIDTH, SCREEN_HEIGHT = (TILE_WIDTH*16, TILE_HEIGHT*9)
-SCREEN_TITLE = "Byte Biter"
+TILE_W, TILE_H = 64, 64
+SCREEN_W, SCREEN_H = TILE_W * 16, TILE_H * 9
 
-VIEWPORT_MARGIN_TOP = TILE_HEIGHT * 3
-VIEWPORT_MARGIN_BOTTOM = TILE_HEIGHT * 3
-VIEWPORT_RIGHT_MARGIN = TILE_WIDTH * 3
-VIEWPORT_LEFT_MARGIN = TILE_WIDTH * 3
+VIEWPORT_MARGIN_TOP = TILE_H * 3
+VIEWPORT_MARGIN_BOTTOM = TILE_H * 3
+VIEWPORT_RIGHT_MARGIN = TILE_W * 3
+VIEWPORT_LEFT_MARGIN = TILE_W * 3
 
-MAP_SIZE = 64
+MAP_SIZE = 32
 
-MOVEMENT_SPEED = 10
+MOVEMENT_SPEED = 5
 JUMP_SPEED = 25
 GRAVITY = 1
 
-MY_FILE = 'main.py'
+MY_FILE = 'Alice'
 
-NUM_OF_MAPS = 0
+SCREEN_TITLE = MY_FILE.split('.')[0]
 
-map_dir = sorted([mf for mf in [mf for mf in os.listdir('./Maps') if os.path.isfile(os.path.join('./Maps', mf))] if
-                  mf.endswith('.tmx')])
-for file in map_dir:
-    os.remove('./Maps/{}'.format(file))
+MAP_DIR = sorted([mf for mf in [mf for mf in os.listdir('./Maps') if os.path.isfile(os.path.join('./Maps', mf))] if mf.endswith('.tmx') and 'level' in mf])
+for file in MAP_DIR:
+    os.remove(f'./Maps/{file}')
 
-map_header = '''<?xml version="1.0" encoding="UTF-8"?>
-<map version="1.2" tiledversion="1.2.3" orientation="orthogonal" renderorder="right-down" width="{0}" height="{0}" 
+MAP_HEADER = f'''<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.2" tiledversion="1.2.3" orientation="orthogonal" renderorder="right-down" width="{MAP_SIZE}" height="{MAP_SIZE}" 
 tilewidth="64" tileheight="64" infinite="0" nextlayerid="2" nextobjectid="1">
  <tileset firstgid="1" source="./tiles.tsx"/>
- <layer id="1" name="Platforms" width="{0}" height="{0}">
-  <data encoding="csv">'''.format(MAP_SIZE)
+ <layer id="1" name="Platforms" width="{MAP_SIZE}" height="{MAP_SIZE}">
+  <data encoding="csv">'''
 
-map_footer = '''</data>
+MAP_FOOTER = '''</data>
  </layer>
 </map>'''
 
 
-def write_to_map(level_data, level):
-    # generate a "valid" tmx file, though due to differences in EOL characters, it cannot be opened with Tiled. still works tho
-    np.savetxt('./Maps/{cur_l}'.format(cur_l=level),
-               level_data, delimiter=",", fmt='%s', header=map_header,
-               footer=map_footer, comments='')
+def write_map(level_data, level):
+    """Generate a "valid" tmx file, though due to differences in EOL characters
+    it cannot be opened with Tiled. Works for my purposes regardless."""
+    np.savetxt(f'./Maps/{level}', level_data, delimiter=",", fmt='%s',
+               header=MAP_HEADER, footer=MAP_FOOTER, comments='')
 
 
 @lru_cache(None)
 def byte_to_hex(pair):
+    """Converts a pair of bytes into a pair of hex values."""
     # (0xa, 0xb) -> (10, 11)
     val = hex(pair)[2:].zfill(2)
     return int(val[0], 16), int(val[1].zfill(1), 16)
@@ -57,18 +56,27 @@ def byte_to_hex(pair):
 
 @lru_cache(None)
 def hex_to_byte(pair):
+    """Converts a pair of hex values into a pair of bytes."""
     # (10, 10) -> (0xa, 0xa)
+    if -1 in pair:
+        return b' '
     return bytes([int(hex(pair[0])[2] + hex(pair[1])[2], 16)])
 
 
+@lru_cache(None)
+def get_block(coord: int):
+    """Rounds a value to it's nearest tile."""
+    return int(coord // TILE_H * TILE_H)
+
+
 def file_to_levels(input_file=MY_FILE):
-    global NUM_OF_MAPS
+    """Converts a binary file into a TMX level."""
     with open(input_file, 'rb') as input_data:
-        # convert int (255) -> hex (0xff) -> two hex values (0x0f, 0x0f) -> two int values -> (15, 15) -> add 1 to each
-        mario_rom = [item for sublist in [byte_to_hex(i) for i in input_data.read()] for item in sublist]
+        # int (255) -> hex (0xff) -> two hex values (0x0f, 0x0f) -> two int values -> (15, 15)
+        rom = [item for sublist in [byte_to_hex(i) for i in input_data.read()] for item in sublist]
 
     # split the data
-    level_map_data = [mario_rom[x:x+MAP_SIZE**2] for x in range(0, len(mario_rom), MAP_SIZE**2)]
+    level_map_data = [rom[x:x+MAP_SIZE**2] for x in range(0, len(rom), MAP_SIZE**2)]
 
     # pad the last map with empty space, so all maps are the same size
     level_map_data[-1] += [-1] * (MAP_SIZE**2 - len(level_map_data[-1]))
@@ -78,79 +86,79 @@ def file_to_levels(input_file=MY_FILE):
 
     for map_num, cur_map in enumerate(maps):
         # save the array as a CSV, with header and footer data attached
-        write_to_map(cur_map, 'level_{0:0>8}.tmx'.format(map_num))
+        write_map(cur_map, f'level_{map_num:0>8}.tmx')
 
     # counting starts at 0, so len is 1 too high
-    NUM_OF_MAPS = len(maps) - 1
-    return
 
 
-def levels_to_file(input_file=MY_FILE, changed_block=None):
+def levels_to_file(input_file=MY_FILE):
+    """Converts TMX level data into a binary file."""
     paired_data = []
-    if not changed_block:
-        for map_file in map_dir:
-            with open('./Maps/{}'.format(map_file)) as f:
-                #  cur_rom_space will be a list of lists, looking like [[4, 1, 6, 9...]...]
-                cur_rom_space = [(int(i)) for i in ','.join(f.read().split('\n')[6:-4]).split(',') if i != '-1' and i != '']
+    for map_file in MAP_DIR:
+        with open(f'./Maps/{map_file}') as cur_map:
+            # map_data will be a list of strings, looking like ['4', '1', '6', '9'...] with some
+            # "impossible" values, '-1' and ''
+            map_data = ','.join(cur_map.read().split('\n')[6:-4]).split(',')
+            #  cur_rom_space will be a list of lists, looking like [[4, 1, 6, 9...]...]
+            cur_rom_space = [(int(i)) for i in map_data if i not in ('-1', '')]
 
-                # re pair up the nums, so it's [[41, 69], [42, 20]...]
-                paired_data.append(list(zip(cur_rom_space[::2], cur_rom_space[1::2])))
+            # re pair up the nums, so it's [[41, 69], [42, 20]...]
+            paired_data.append(list(zip(cur_rom_space[::2], cur_rom_space[1::2])))
 
-        # de-nest the lists, and convert the pairs back into bytes, then string them all together.
-        output_data = [b''.join([hex_to_byte(val) for val in rom_item]) for rom_item in paired_data]
-    else:
-        pass
+    # de-nest the lists, and convert the pairs back into bytes, then string them all together.
+    output_data = [b''.join([hex_to_byte(val) for val in rom_item]) for rom_item in paired_data]
+
     # if there is not a backup file, create one.
-    if not os.path.isfile('{}.bak'.format(input_file)):
+    if not os.path.isfile(f'{input_file}.bak'):
         with open(input_file, 'br+') as src_file:
-            with open('{}.bak'.format(input_file), 'wb') as backup:
+            with open(f'{input_file}.bak', 'wb') as backup:
                 backup.write(src_file.read())
 
     # write over the old data with the new
-    with open(input_file, 'br+') as fw:
+    with open(input_file, 'br+') as cur_map:
         for line in output_data:
-            fw.write(line)
-    return
-
-# This is all horribly broken.
-def write_wrapper():
-    while True:
-        try:
-            if NesGame.need_update:
-                print('called')
-                levels_to_file()
-                file_to_levels()
-                NesGame.need_update = False
-        except AttributeError:
-            time.sleep(1)
+            cur_map.write(line)
 
 
 def gen_item_menu(menu_items):
+    """Generate a level with menu items inside
+     such that the player can choose options while still playing like normal."""
     # create a blank array
     menu = np.zeros((MAP_SIZE, MAP_SIZE), dtype=int)
 
     for item_pos, list_item in enumerate(menu_items):
 
         # convert each menu item into data, then flatten the data
-        hex_list_item = [item for sublist in [byte_to_hex(i) for i in list_item] for item in sublist]
+        hex_dat_item = [item for sublist in [byte_to_hex(i) for i in list_item] for item in sublist]
 
         # place each menu item on the array, skipping lines
-        item_len = len(hex_list_item)
-        menu[item_pos*2, 0:item_len] = hex_list_item
+        item_len = len(hex_dat_item)
+        menu[item_pos*2, 0:item_len] = hex_dat_item
 
     # make it into a map and send it out
-    write_to_map(menu, 'Menu.tmx')
-    return
+    write_map(menu, 'Menu.tmx')
+
+
+def write_wrapper():
+    """A simple holder function to run while the main game runs. It writes the levels to a file,
+    then generates a level based off of that file.
+    It's ordered this way so that changes are not reverted each time the level is updated."""
+    while True:
+        levels_to_file()
+        file_to_levels()
 
 
 class NesGame(arcade.Window):
+    """The game function. Produces a scene with:
+    - A hexadecimal representation of a given file
+    - A player sprite capable of making arbitrary modifications to the representation"""
     def __init__(self):
-        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
+        super().__init__(SCREEN_W, SCREEN_H, SCREEN_TITLE)
         file_path = os.path.dirname(os.path.abspath(__file__))
         os.chdir(file_path)
 
         # Player stuff
-        self.cur_block = self.cur_block_y, self.cur_block_x = (0, 0)
+        self.cur_block_y, self.cur_block_x = (0, 0)
         self.wall_list = None
         self.player_list = None
         self.player_sprite = None
@@ -163,67 +171,69 @@ class NesGame(arcade.Window):
         self.my_map = None
 
         self.level = 0
-        self.max_level = NUM_OF_MAPS
 
-        self.end_of_map = MAP_SIZE * TILE_HEIGHT
-
-        self.last_time = None
-        self.frame_count = 0
-        self.fps_message = None
-
-        self.pause = False
-        self.show_bytes = False
-
-        self.need_update = False
+        self.end_of_map = MAP_SIZE * TILE_H
 
     def setup(self):
+        """Generates a player sprite and sets it's position/center"""
         self.player_list = arcade.SpriteList()
-        self.player_sprite = arcade.Sprite("images/character.png", 0.5)
+        self.player_sprite = arcade.Sprite("images/character.png", 1)
 
-        self.player_sprite.center_x = TILE_WIDTH // 2
-        self.player_sprite.center_y = TILE_HEIGHT // 2
+        self.player_sprite.center_x = TILE_W // 2
+        self.player_sprite.center_y = TILE_H // 2
         self.player_list.append(self.player_sprite)
-        self.player_sprite.bottom = TILE_HEIGHT * MAP_SIZE
+        self.player_sprite.bottom = TILE_H * MAP_SIZE
 
         self.load_level()
 
     def load_level(self):
-        self.need_update = True
-        self.my_map = arcade.read_tiled_map('./Maps/level_{cur_l:0>8}.tmx'.format(cur_l=self.level), 1)
+        """Loads the next or previous chunk of data,
+        then re-initializes the platformer engine."""
+        self.my_map = arcade.read_tiled_map(f'./Maps/level_{self.level:0>8}.tmx', 1)
         self.wall_list = arcade.generate_sprites(self.my_map, 'Platforms', 1)
         self.physics_engine = arcade.PhysicsEnginePlatformer(self.player_sprite,
                                                              self.wall_list,
                                                              gravity_constant=GRAVITY)
+        self.physics_engine.enable_multi_jump(1)
 
     def on_draw(self):
+        """Draws the player, walls, current text, and FPS.
+        TODO: move all the math somewhere else."""
 
-        self.frame_count += 1
         arcade.start_render()
         # Draw all the sprites.
         self.player_list.draw()
         self.wall_list.draw()
 
-        if self.last_time and self.frame_count % 60 == 0:
-            fps = 1.0 / (time.time() - self.last_time) * 60
-            self.fps_message = 'FPS: {:5.0f}'.format(fps)
-
-        if self.fps_message:
-            arcade.draw_text(self.fps_message, self.view_left + 10, self.view_bottom + 40, arcade.color.WHITE, 14)
-
-        if self.frame_count % 60 == 0:
-            self.last_time = time.time()
-        if self.show_bytes or True:
-            try:
-                hex_block = self.my_map.layers_int_data['Platforms'][self.cur_block_y][abs(round(self.cur_block_x/2)*2 - 2):round(self.cur_block_x/2)*2+10]
-            except IndexError:
-                hex_block = (0, 0)
-            v_l = self.view_left + TILE_WIDTH
-            arcade.draw_text(str(b''.join([hex_to_byte(tuple(i)) for i in list(zip(hex_block[::2], hex_block[1::2]))]))[2:-1], v_l, self.view_bottom + SCREEN_HEIGHT - TILE_HEIGHT, arcade.color.WHITE, 24)
+        arcade.draw_lrtb_rectangle_outline(*map(get_block, [self.player_sprite.left,
+                                                            self.player_sprite.left + TILE_W,
+                                                            self.player_sprite.bottom,
+                                                            self.player_sprite.bottom - TILE_H]),
+                                           color=[255, 00, 00, 100], border_width=8)
+        try:
+            byte_x = round(self.cur_block_x/2) * 2
+            if byte_x < 2:
+                byte_x = 2
+            hex_block = self.my_map.layers_int_data['Platforms'][self.cur_block_y][byte_x-2:byte_x+10]
+        except IndexError:
+            hex_block = [0, 0]
+        arcade.draw_text(str(b''.join([hex_to_byte(tuple(i)) for i in list(zip(hex_block[::2], hex_block[1::2]))])).replace('\\x00', ' ')[2:-1], self.view_left + TILE_W, self.view_bottom + SCREEN_H - TILE_H, arcade.color.WHITE, 24)
 
     def on_key_press(self, key, modifiers):
+        """Called when a key is pressed
+
+        UP      -   Jump
+        DOWN    -   either fall to the ground if the player is in the air
+                    or go down a row of blocks
+        LEFT    -   Move the player left, currently there is no acceleration
+        RIGHT   -   Move the player right, currently there is no acceletation
+        W       -   Change the value of the block the player is standing on up by one
+        S       -   Change the value of the block the player is standing on down by one
+
+        """
+        cur_block = self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x]
         if key == arcade.key.UP:
-            # Currently there's little restriction on movement, so i can bounce around more easily.
-            if self.physics_engine.can_jump() or True:
+            if self.physics_engine.can_jump():
                 self.player_sprite.change_y = JUMP_SPEED
         if key == arcade.key.DOWN:
             if self.physics_engine.can_jump():
@@ -234,31 +244,34 @@ class NesGame(arcade.Window):
             self.player_sprite.change_x = -MOVEMENT_SPEED
         if key == arcade.key.RIGHT:
             self.player_sprite.change_x = MOVEMENT_SPEED
-        if key == arcade.key.S and self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x] > 0:
+        if key == arcade.key.S and cur_block > 0:
             self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x] -= 1
-            write_to_map(self.my_map.layers_int_data['Platforms'], level='level_{0:0>8}.tmx'.format(self.level))
+            write_map(self.my_map.layers_int_data['Platforms'], level=f'level_{self.level:0>8}.tmx')
             self.load_level()
-        if key == arcade.key.W and self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x] < 15:
+        if key == arcade.key.W and cur_block < 15:
             self.my_map.layers_int_data['Platforms'][self.cur_block_y][self.cur_block_x] += 1
-            write_to_map(self.my_map.layers_int_data['Platforms'], level='level_{0:0>8}.tmx'.format(self.level))
+            write_map(self.my_map.layers_int_data['Platforms'], level=f'level_{self.level:0>8}.tmx')
             self.load_level()
         if key == arcade.key.ESCAPE:
             arcade.close_window()
-        if key == arcade.key.P:
-            self.pause = not self.pause
 
     def on_key_release(self, key, modifiers):
-        if key == arcade.key.LEFT or key == arcade.key.RIGHT:
+        """Stops the players movement when LEFT or RIGHT are released"""
+        if key in (arcade.key.LEFT, arcade.key.RIGHT):
             self.player_sprite.change_x = 0
 
     def update(self, delta_time):
-        if self.pause:
-            return
+        """Frame update function
 
-        self.cur_block = self.cur_block_y, self.cur_block_x = MAP_SIZE - int((self.player_sprite.bottom // TILE_HEIGHT)), int(self.player_sprite.left // TILE_WIDTH) + 1
+        controls switching levels,
+        deciding which block the player is standing on,
+        and moving the camera.
+        """
+        self.cur_block_y = MAP_SIZE - get_block(self.player_sprite.bottom) // TILE_H
+        self.cur_block_x = get_block(self.player_sprite.left) // TILE_W + 1
 
         def up_level():
-            if self.level < self.max_level:
+            if self.level < len(MAP_DIR) - 1:
                 self.level += 1
             else:
                 self.level = 0
@@ -269,12 +282,12 @@ class NesGame(arcade.Window):
             if self.level > 0:
                 self.level -= 1
             else:
-                self.level = NUM_OF_MAPS
+                self.level = len(MAP_DIR) - 1
             self.load_level()
-            self.player_sprite.left = TILE_WIDTH * MAP_SIZE - 1
-        if self.player_sprite.right >= self.end_of_map + TILE_WIDTH * 2:
+            self.player_sprite.left = TILE_W * MAP_SIZE - 1
+        if self.player_sprite.right >= self.end_of_map + TILE_W * 2:
             up_level()
-        if self.player_sprite.left <= -(TILE_WIDTH * 2):
+        if self.player_sprite.left <= -(TILE_W * 2):
             down_level()
         self.physics_engine.update()
 
@@ -285,13 +298,13 @@ class NesGame(arcade.Window):
             changed = True
 
         # Scroll right
-        right_boundary = self.view_left + SCREEN_WIDTH - VIEWPORT_RIGHT_MARGIN
+        right_boundary = self.view_left + SCREEN_W - VIEWPORT_RIGHT_MARGIN
         if self.player_sprite.right > right_boundary:
             self.view_left += self.player_sprite.right - right_boundary
             changed = True
 
         # Scroll up
-        top_boundary = self.view_bottom + SCREEN_HEIGHT - VIEWPORT_MARGIN_TOP
+        top_boundary = self.view_bottom + SCREEN_H - VIEWPORT_MARGIN_TOP
         if self.player_sprite.top > top_boundary:
             self.view_bottom += self.player_sprite.top - top_boundary
             changed = True
@@ -306,16 +319,13 @@ class NesGame(arcade.Window):
             self.view_left = int(self.view_left)
             self.view_bottom = int(self.view_bottom)
             arcade.set_viewport(self.view_left,
-                                SCREEN_WIDTH + self.view_left,
+                                SCREEN_W + self.view_left,
                                 self.view_bottom,
-                                SCREEN_HEIGHT + self.view_bottom)
-
-    def on_close(self):
-        print('here')
-        arcade.close_window()
+                                SCREEN_H + self.view_bottom)
 
 
 def main():
+    """generates a window and runs the game code, the read/write code is disconnected from this."""
     window = NesGame()
     window.setup()
     arcade.run()
@@ -324,9 +334,22 @@ def main():
 if __name__ == '__main__':
     file_to_levels()
 
-    game_process = Process(target=main)
-    write_process = Process(target=write_wrapper)
-    game_process.start()
-    write_process.start()
-    game_process.join()
-    write_process.join()
+    GAME_PROCESS = mp.Process(target=main)
+    WRITE_PROCESS = mp.Process(target=write_wrapper, daemon=True)
+    GAME_PROCESS.start()
+    WRITE_PROCESS.start()
+    while True:
+        if not GAME_PROCESS.is_alive() and not WRITE_PROCESS.is_alive():
+            break
+
+        if GAME_PROCESS.is_alive() and not WRITE_PROCESS.is_alive():
+            GAME_PROCESS.terminate()
+            break
+
+        if not GAME_PROCESS.is_alive() and WRITE_PROCESS.is_alive():
+            WRITE_PROCESS.terminate()
+            break
+        time.sleep(1)
+
+    GAME_PROCESS.join()
+    WRITE_PROCESS.join()
