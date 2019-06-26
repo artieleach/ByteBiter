@@ -1,4 +1,4 @@
-"""Mian file for ByteBiter, a game wherein you explore files. Based off a bug from SMB2"""
+"""Main file for ByteBiter, a game wherein you explore files. Based off a bug from SMB2"""
 
 import time
 import os
@@ -47,8 +47,9 @@ def write_map(level_data, level):
     """Generate a "valid" tmx file, though due to differences in EOL characters
     it cannot be opened with Tiled. Works for my purposes regardless.
 
-    :param level_data: a numpy array of integers
-    :param level: the filename
+    :param np.array level_data: a numpy array of integers
+    :param string level: the filename
+
     """
     np.savetxt(f'./Maps/{level}', level_data, delimiter=",", fmt='%s',
                header=MAP_HEADER, footer=MAP_FOOTER, comments='')
@@ -58,7 +59,7 @@ def write_map(level_data, level):
 def byte_to_hex(pair):
     """Converts a pair of bytes into a pair of hex values.
 
-    :param pair: a pair of bytes
+    :param int pair: a pair of bytes
     :returns: a pair of hex values
 
     """
@@ -70,8 +71,9 @@ def byte_to_hex(pair):
 @lru_cache(256)
 def hex_to_byte(pair):
     """Converts a pair of bytes into a pair of hex values.
-    :param pair: a pair of hex values
-    :returns: a pair of bytes
+
+    :param tuple pair: a pair of hex values
+    :returns: a byte or pair of bytes
 
     """
     # (10, 10) -> (0xa, 0xa)
@@ -82,12 +84,18 @@ def hex_to_byte(pair):
 
 @lru_cache(None)
 def get_block(coord: int):
-    """Rounds a value to it's nearest tile."""
+    """Rounds a value to it's nearest tile.
+
+    :param int coord: an integer
+    :returns: that integer rounded to the nearest tile
+
+    """
     return int(coord // TILE_H * TILE_H)
 
 
 def file_to_levels():
     """Converts a binary file into a TMX level."""
+
     with open(MY_FILE, 'rb') as input_data:
         # int (255) -> hex (0xff) -> two hex values (0x0f, 0x0f) -> two int values -> (15, 15)
         rom = [item for sublist in [byte_to_hex(i) for i in input_data.read()] for item in sublist]
@@ -105,11 +113,10 @@ def file_to_levels():
         # save the array as a CSV, with header and footer data attached
         write_map(cur_map, f'level_{map_num:0>8}.tmx')
 
-    # counting starts at 0, so len is 1 too high
-
 
 def levels_to_file():
     """Converts TMX level data into a binary file."""
+
     paired_data = []
     for map_file in MAP_DIR:
         with open(f'./Maps/{map_file}') as cur_map:
@@ -140,6 +147,7 @@ def levels_to_file():
 def gen_item_menu(menu_items):
     """Generate a level with menu items inside
      such that the player can choose options while still playing like normal."""
+
     # create a blank array
     menu = np.zeros((MAP_SIZE, MAP_SIZE), dtype=int)
 
@@ -160,6 +168,7 @@ def write_wrapper():
     """A simple holder function to run while the main game runs. It writes the levels to a file,
     then generates a level based off of that file.
     It's ordered this way so that changes are not reverted each time the level is updated."""
+
     while True:
         levels_to_file()
         file_to_levels()
@@ -195,6 +204,7 @@ class NesGame(arcade.Window):
 
     def setup(self):
         """Generates a player sprite and sets it's position/center"""
+
         self.player_list = arcade.SpriteList()
         self.player_sprite = arcade.Sprite("images/character.png", 1)
 
@@ -208,6 +218,7 @@ class NesGame(arcade.Window):
     def load_level(self):
         """Loads the next or previous chunk of data,
         then re-initializes the platformer engine."""
+
         self.my_map = arcade.read_tiled_map(f'./Maps/level_{self.level:0>8}.tmx', 1)
         self.wall_list = arcade.generate_sprites(self.my_map, 'Platforms', 1)
         self.physics_engine = arcade.PhysicsEnginePlatformer(self.player_sprite,
@@ -223,6 +234,7 @@ class NesGame(arcade.Window):
         self.player_list.draw()
         self.wall_list.draw()
 
+        # highlight which block the player is standing on
         arcade.draw_lrtb_rectangle_outline(*map(get_block, [self.player_sprite.left,
                                                             self.player_sprite.left + TILE_W,
                                                             self.player_sprite.bottom,
@@ -255,7 +267,10 @@ class NesGame(arcade.Window):
         S       -   Change the value of the block the player is standing on down by one
 
         """
-        cur_block = self.my_map.layers_int_data['Platforms'][self.p_block_y][self.p_block_x]
+        try:
+            cur_block = self.my_map.layers_int_data['Platforms'][self.p_block_y][self.p_block_x]
+        except IndexError:
+            cur_block = 0
         if symbol == arcade.key.UP:
             if self.physics_engine.can_jump():
                 self.player_sprite.change_y = JUMP_SPEED
@@ -281,6 +296,7 @@ class NesGame(arcade.Window):
 
     def on_key_release(self, symbol, modifiers):
         """Stops the players movement when LEFT or RIGHT are released"""
+
         if symbol in (arcade.key.LEFT, arcade.key.RIGHT):
             self.player_sprite.change_x = 0
 
@@ -351,18 +367,22 @@ class NesGame(arcade.Window):
 
 def main():
     """generates a window and runs the game code, the read/write code is disconnected from this."""
+
     window = NesGame()
     window.setup()
     arcade.run()
 
 
 if __name__ == '__main__':
+    # run this once to generate the initial levels
     file_to_levels()
 
+    # the game process runs the game, the write process controls updating the files and maps
     GAME_PROCESS = mp.Process(target=main)
     WRITE_PROCESS = mp.Process(target=write_wrapper, daemon=True)
     GAME_PROCESS.start()
     WRITE_PROCESS.start()
+    # when the game is killed, kill the write process
     while True:
         if not GAME_PROCESS.is_alive() and not WRITE_PROCESS.is_alive():
             break
@@ -374,7 +394,9 @@ if __name__ == '__main__':
         if not GAME_PROCESS.is_alive() and WRITE_PROCESS.is_alive():
             WRITE_PROCESS.terminate()
             break
+        # one update per second is real time enough
         time.sleep(1)
 
+    # I have no idea what joining them does, but the internet told me to
     GAME_PROCESS.join()
     WRITE_PROCESS.join()
