@@ -1,4 +1,4 @@
-"""Main file for ByteBiter, a game wherein you explore files. Based off a bug from SMB2"""
+"""Main file for ByteBiter, a game wherein you explore files. Based off a bug from SML2"""
 
 import time
 import os
@@ -230,7 +230,7 @@ class NesGame(arcade.Window):
         """Draws the player, walls, current text, and FPS."""
 
         arcade.start_render()
-        # Draw all the sprites.
+        # Draw all the sprites
         self.player_list.draw()
         self.wall_list.draw()
 
@@ -256,7 +256,7 @@ class NesGame(arcade.Window):
                          arcade.color.WHITE, 24)
 
     def on_key_press(self, symbol, modifiers):
-        """Called when a symbol is pressed
+        """Controls user input
 
         UP      -   Jump
         DOWN    -   either fall to the ground if the player is in the air
@@ -295,7 +295,7 @@ class NesGame(arcade.Window):
             arcade.close_window()
 
     def on_key_release(self, symbol, modifiers):
-        """Stops the players movement when LEFT or RIGHT are released"""
+        """Stops the players horizontal when LEFT or RIGHT are released"""
 
         if symbol in (arcade.key.LEFT, arcade.key.RIGHT):
             self.player_sprite.change_x = 0
@@ -310,26 +310,20 @@ class NesGame(arcade.Window):
         self.p_block_y = MAP_SIZE - get_block(self.player_sprite.bottom) // TILE_H
         self.p_block_x = get_block(self.player_sprite.left) // TILE_W + 1
 
-        def up_level():
+        if self.player_sprite.right >= self.end_of_map + TILE_W * 2:
             if self.level < len(MAP_DIR) - 1:
                 self.level += 1
             else:
                 self.level = 0
             self.load_level()
             self.player_sprite.left = 0
-
-        def down_level():
+        if self.player_sprite.left <= -(TILE_W * 2):
             if self.level > 0:
                 self.level -= 1
             else:
                 self.level = len(MAP_DIR) - 1
             self.load_level()
             self.player_sprite.left = TILE_W * MAP_SIZE - 1
-
-        if self.player_sprite.right >= self.end_of_map + TILE_W * 2:
-            up_level()
-        if self.player_sprite.left <= -(TILE_W * 2):
-            down_level()
         self.physics_engine.update()
 
         changed = False
